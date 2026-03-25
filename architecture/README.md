@@ -4,6 +4,8 @@
 
 This document describes the cloud architecture for Innovate Inc.'s web application. The app is a React SPA frontend with a Flask REST API backend and a PostgreSQL database. The goal is to have something secure, that can scale over time, and supports CI/CD deployments. Users access the system from web browsers and mobile devices.
 
+The terminology in this README is aligned with the high-level architecture diagram (high-level-architecture.svg) to keep naming consistent between documentation and design.
+
 ---
 
 ## 2. Cloud Environment Structure
@@ -19,10 +21,14 @@ The recommendation is to use 4 AWS accounts managed through AWS Organizations. H
 
 ## 3. Network Design (VPC)
 
-Each environment gets its own VPC with 3 Availability Zones. The subnets are split into three layers: public (ALB and NAT Gateway), private for the application (EKS nodes), and private for the database (RDS).
+Each environment gets its own VPC with 3 Availability Zones. In the diagram, the network is represented as one VPC with Public subnet A, B and C, plus Private subnet A, Private subnet B, and Private subnet C.
 
-- The React SPA is stored in **S3** and delivered through **CloudFront**
-- **AWS WAF** is placed in front of CloudFront/ALB to filter bad traffic
+- API traffic follows the path **API** -> **AWS WAF** -> **ALB** -> **Ingress** -> **API Flask**
+- Frontend traffic follows the path **HTTPS** -> **CloudFront Validation** -> **Static Web (S3)**
+- **Amazon Route 53** is the DNS entry layer, routing domain records to the frontend and API entry points
+- **CloudFront Validation** represents the edge validation path for static web delivery
+- **ALB** is the public load-balancing entry point for the Kubernetes workloads
+- **Ingress** inside EKS performs internal HTTP routing to backend services
 - Security Groups are set with least privilege rules, and the database has no public access
 - All traffic uses TLS
 
@@ -30,7 +36,9 @@ Each environment gets its own VPC with 3 Availability Zones. The subnets are spl
 
 ## 4. Compute Platform (Amazon EKS)
 
-The application runs on Amazon EKS, one cluster per environment. There are two node groups: **system-ng** for cluster components and **api-ng** for the Flask API. The Horizontal Pod Autoscaler handles scaling at the pod level, and Cluster Autoscaler (or Karpenter) handles the nodes. All workloads have resource requests and limits configured.
+The application runs on Amazon EKS, one cluster per environment. In the diagram this layer appears as **EKS**, **EKS Node A**, **EKS Node B**, and **EKS Node C**, with **Ingress** exposing the application routes.
+
+The backend service is represented as **API** and **API Flask**. Pod-level scaling is handled by Horizontal Pod Autoscaler, while node-level scaling is handled by Cluster Autoscaler (or Karpenter). All workloads have resource requests and limits configured.
 
 ---
 
@@ -38,15 +46,17 @@ The application runs on Amazon EKS, one cluster per environment. There are two n
 
 The backend is packaged as a Docker image and stored in **Amazon ECR**. Image scanning is enabled to catch vulnerabilities before deploying.
 
-The CI/CD pipeline works like this: run tests → build image → push to ECR → deploy to Dev → promote to Staging → promote to Production (requires manual approval). Helm or Kustomize is used to manage the Kubernetes manifests. Deployments use rolling updates and can be rolled back quickly if something goes wrong.
+To match the diagram naming, CI/CD is represented as **Pipeline Backend** and **Pipeline Frontend** with the stages **Push**, **Build**, **Automated Test**, **ECR Push**, and **Kubectl Apply**.
+
+In practice, the flow works like this: run tests -> build image -> push to ECR -> deploy to Dev -> promote to Staging -> promote to Production (requires manual approval). Helm or Kustomize is used to manage the Kubernetes manifests. Deployments use rolling updates and can be rolled back quickly if something goes wrong.
 
 ---
 
 ## 6. Data Layer
 
-- **RDS PostgreSQL (Multi-AZ)** — chosen because it is a fully managed service, which reduces operational work for a small team. It has built-in high availability, automatic backups with point-in-time recovery, and supports read replicas. For disaster recovery, snapshots are copied to another region. The target is RPO under 15 minutes and RTO under 1 hour.
+- **RDS PostgreSQL (Multi-AZ)** — in the diagram this tier is represented by **Primary**, **StandBy**, and **Read Replica**. It is chosen because it is a fully managed service, which reduces operational work for a small team. It has built-in high availability, automatic backups with point-in-time recovery, and supports read replicas. For disaster recovery, snapshots are copied to another region. The target is RPO under 15 minutes and RTO under 1 hour.
 - **ElastiCache (Redis)** — used as a cache between the API and the database to reduce load on RDS.
-- **S3** — stores the React SPA static files, served through CloudFront.
+- **S3** — stores the React SPA static files, delivered through the edge layer represented in the diagram.
 
 ---
 
